@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>随机点名系统</title>
+    <!-- xlsx库用于解析Excel文件 -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- Three.js库用于3D效果 -->
+    <script src="https://code.bdstatic.com/npm/three@0.132.2/build/three.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: black;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        /* 动态背景 */
+        #background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+        }
+        
+        /* 标题区域 */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 10%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        
+        .title {
+            color: cyan;
+            font-size: 36px;
+            font-weight: normal;
+        }
+        
+        /* 控制按钮区域 */
+        .controls {
+            position: fixed;
+            bottom: 0;
+            left: 5%;
+            width: 12%;
+            height: 90%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            z-index: 90;
+        }
+        
+        .btn {
+            width: 80%;
+            padding: 15px;
+            border: 2px solid cyan;
+            background-color: transparent;
+            color: cyan;
+            font-size: 14px;
+            font-weight: normal;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+        
+        .btn:hover {
+            background-color: rgba(0, 255, 255, 0.2);
+            transform: scale(1.05);
+        }
+        
+        /* 姓名球形区域 */
+        #nameSphereContainer {
+            position: fixed;
+            top: 10%;
+            left: 0;
+            width: 100%;
+            height: 90%;
+            z-index: 80;
+        }
+        
+        /* 结果展示区域 */
+        #result {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(255, 165, 0, 0.8);
+            padding: 60px 100px;
+            border-radius: 10px;
+            z-index: 200;
+            display: none;
+        }
+        
+        #result-name {
+            color: white;
+            font-size: 80px;
+            font-weight: normal;
+            text-align: center;
+        }
+        
+        /* 导入文件输入 */
+        #fileInput {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <!-- 动态背景 -->
+    <canvas id="background"></canvas>
+    
+    <!-- 标题区域 -->
+    <div class="header">
+        <h1 class="title">随机点名系统</h1>
+    </div>
+    
+    <!-- 控制按钮区域 -->
+    <div class="controls">
+        <input type="file" id="fileInput" accept=".xlsx,.xls">
+        <button class="btn" id="importBtn">导入姓名</button>
+        <button class="btn" id="startBtn">开始</button>
+        <button class="btn" id="stopBtn">停止</button>
+        <button class="btn" id="resetBtn">重置</button>
+        <button class="btn" id="fullscreenBtn">全屏</button>
+    </div>
+    
+    <!-- 姓名球形区域 -->
+    <div id="nameSphereContainer"></div>
+    
+    <!-- 结果展示区域 -->
+    <div id="result">
+        <div id="result-name"></div>
+    </div>
+    
+    <!-- 音效 -->
+    <audio id="clickSound" src="media/点击音效.mp3"></audio>
+    <audio id="bgMusic" src="media/背景音乐.mp3" loop preload="none"></audio>
+    
+    <script>
+        // 全局变量
+        let points = [];
+        let names = Array(100).fill('姓名');
+        let selectedNames = [];
+        let currentSelectedName = '';
+        let isSpinning = false;
+        let spinInterval;
+        let sphereSize = 170;
+        
+        // Three.js相关变量
+        let scene, camera, renderer;
+        let particles = [];
+        let isSpinningFast = false;
+        let rotationAxis;
+        
+        // 生成随机旋转轴
+        function getRandomRotationAxis() {
+            const x = Math.random() * 2 - 1;
+            const y = Math.random() * 2 - 1;
+            const z = Math.random() * 2 - 1;
+            return new THREE.Vector3(x, y, z).normalize();
+        }
+        
+        // 初始化
+        function init() {
+            initBackground();
+            initThreeJS(); // 初始化Three.js场景
+            createNameSphere(); // 创建3D名字球体
+            bindEvents();
+        }
+        
+        // 初始化Three.js场景
+        function initThreeJS() {
+            const container = document.getElementById('nameSphereContainer');
+            
+            // 创建场景
+            scene = new THREE.Scene();
+            
+            // 创建相机
+            camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.z = 300;
+            
+            // 创建渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+            
+            // 添加环境光
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+            scene.add(ambientLight);
+            
+            // 添加点光源
+            const pointLight = new THREE.PointLight(0x00ffff, 1);
+            pointLight.position.set(150, 150, 150);
+            scene.add(pointLight);
+            
+            // 初始化旋转轴
+            rotationAxis = getRandomRotationAxis();
+            
+            // 定义X轴、Y轴和Z轴，用于三轴叠加旋转
+            const xAxis = new THREE.Vector3(1, 0, 0).normalize(); // X轴
+            const yAxis = new THREE.Vector3(0, 1, 0).normalize(); // Y轴
+            const zAxis = new THREE.Vector3(0, 0, 1).normalize(); // Z轴
+            
+            // 动画循环 - 三轴叠加旋转
+            function animate() {
+                requestAnimationFrame(animate);
+                
+                // 三轴叠加旋转
+                const speed = isSpinningFast ? 0.1 : 0.005;
+                
+                particles.forEach(particle => {
+                    // 先重置粒子位置到球面上
+                    const direction = particle.position.clone().normalize();
+                    const targetPosition = direction.multiplyScalar(sphereSize);
+                    particle.position.lerp(targetPosition, 0.05);
+                    
+                    // 同时绕X轴、Y轴和Z轴旋转
+                    particle.position.applyAxisAngle(xAxis, speed);
+                    particle.position.applyAxisAngle(yAxis, speed);
+                    particle.position.applyAxisAngle(zAxis, speed);
+                });
+                
+                renderer.render(scene, camera);
+            }
+            
+            animate();
+            
+            // 窗口大小调整
+            window.addEventListener('resize', () => {
+                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            });
+        }
+        
+        // 创建名字球体
+        function createNameSphere() {
+            // 清除之前的粒子
+            particles.forEach(particle => {
+                scene.remove(particle);
+            });
+            particles = [];
+            
+            if (names.length === 0) return;
+            
+            const radius = sphereSize;
+            const particleCount = Math.min(names.length, 200);
+            
+            for (let i = 0; i < particleCount; i++) {
+                const name = names[i % names.length];
+                
+                // 创建Canvas纹理
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.width = 400;
+                canvas.height = 200;
+                
+                // 检查姓名是否被选中
+                const isSelected = selectedNames.includes(name);
+                
+                // 设置字体和样式
+                context.font = 'Normal 60px Microsoft YaHei';
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                
+                // 如果被选中，使用白色文字和橘黄色背景
+                if (isSelected) {
+                    // 绘制橘黄色背景
+                    context.fillStyle = 'rgba(255, 165, 0, 0.8)';
+                    context.fillRect(0, 0, canvas.width, canvas.height);
+                    // 绘制白色文字
+                    context.fillStyle = 'white';
+                } else {
+                    // 未被选中，使用青色文字
+                    context.fillStyle = '#00ffff';
+                }
+                
+                context.fillText(name, canvas.width / 2, canvas.height / 2);
+                
+                const texture = new THREE.CanvasTexture(canvas);
+                
+                const spriteMaterial = new THREE.SpriteMaterial({ 
+                    map: texture,
+                    transparent: true,
+                    opacity: 0.95
+                });
+                
+                const sprite = new THREE.Sprite(spriteMaterial);
+                sprite.scale.set(60, 30, 1);
+                
+                // 在球面上均匀分布粒子
+                const phi = Math.acos(-1 + (2 * i) / particleCount);
+                const theta = Math.sqrt(particleCount * Math.PI) * phi;
+                
+                sprite.position.setFromSphericalCoords(radius, phi, theta);
+                sprite.userData = { 
+                    name: name, // 存储姓名信息
+                    velocity: new THREE.Vector3(
+                        (Math.random() - 0.5) * 0.2,
+                        (Math.random() - 0.5) * 0.2,
+                        (Math.random() - 0.5) * 0.2
+                    ) 
+                };
+                
+                scene.add(sprite);
+                particles.push(sprite);
+            }
+        }
+        
+        // 初始化动态背景
+        function initBackground() {
+            const canvas = document.getElementById('background');
+            const ctx = canvas.getContext('2d');
+            
+            // 设置canvas尺寸
+            function resizeCanvas() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+            
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            
+            // 创建光点
+            for (let i = 0; i < 200; i++) {
+                points.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    z: Math.random() * 1000,
+                    size: Math.random() * 3 + 1,
+                    speed: Math.random() * 2 + 1
+                });
+            }
+            
+            // 动画循环
+            function animate() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                points.forEach(point => {
+                    // 更新位置
+                    point.z -= point.speed;
+                    if (point.z < 0) {
+                        point.z = 1000;
+                        point.x = Math.random() * canvas.width;
+                        point.y = Math.random() * canvas.height;
+                    }
+                    
+                    // 计算屏幕坐标和大小
+                    const scale = 500 / (500 + point.z);
+                    const screenX = (point.x - canvas.width / 2) * scale + canvas.width / 2;
+                    const screenY = (point.y - canvas.height / 2) * scale + canvas.height / 2;
+                    const screenSize = point.size * scale;
+                    
+                    // 绘制光点
+                    ctx.beginPath();
+                    ctx.arc(screenX, screenY, screenSize, 0, Math.PI * 2);
+                    ctx.fillStyle = 'cyan';
+                    ctx.fill();
+                });
+                
+                requestAnimationFrame(animate);
+            }
+            
+            animate();
+        }
+        
+        // 绑定事件
+        function bindEvents() {
+            // 导入姓名
+            document.getElementById('importBtn').addEventListener('click', () => {
+                playClickSound();
+                document.getElementById('fileInput').click();
+            });
+            
+            document.getElementById('fileInput').addEventListener('change', handleFileImport);
+            
+            // 开始按钮
+            document.getElementById('startBtn').addEventListener('click', () => {
+                playClickSound();
+                startSpinning();
+            });
+            
+            // 停止按钮
+            document.getElementById('stopBtn').addEventListener('click', () => {
+                playClickSound();
+                stopSpinning();
+            });
+            
+            // 重置按钮
+            document.getElementById('resetBtn').addEventListener('click', () => {
+                playClickSound();
+                reset();
+            });
+            
+            // 全屏按钮
+            document.getElementById('fullscreenBtn').addEventListener('click', () => {
+                playClickSound();
+                toggleFullscreen();
+            });
+        }
+        
+        // 播放点击音效
+        function playClickSound() {
+            const sound = document.getElementById('clickSound');
+            sound.currentTime = 0;
+            sound.play();
+        }
+        
+        // 读出名字
+        function speakName(name) {
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(name);
+                utterance.lang = 'zh-CN'; // 使用中文语音
+                speechSynthesis.speak(utterance);
+            }
+        }
+        
+        // 处理文件导入
+        function handleFileImport(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                
+                // 获取第一个工作表
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                
+                // 解析数据
+                const jsonData = XLSX.utils.sheet_to_json(worksheet);
+                
+                // 提取姓名（假设姓名在第一列）
+                names = jsonData.map(item => {
+                    const value = Object.values(item)[0];
+                    return value ? String(value).trim() : '';
+                }).filter(name => name);
+                
+                if (names.length === 0) {
+                    alert('未找到姓名数据');
+                    names = ['姓名'];
+                }
+                
+                // 重置为初始状态
+                selectedNames = [];
+                currentSelectedName = null;
+                sphereSize = 170; // 重置为初始大小
+                isSpinning = false;
+                isSpinningFast = false;
+                
+                // 停止背景音乐
+                document.getElementById('bgMusic').pause();
+                
+                // 隐藏结果
+                document.getElementById('result').style.display = 'none';
+                
+                // 重新创建球体
+                createNameSphere();
+            };
+            reader.readAsArrayBuffer(file);
+        }
+        
+        // 开始旋转
+        function startSpinning() {
+            if (isSpinning) return;
+            
+            isSpinning = true;
+            isSpinningFast = true;
+            
+            document.getElementById('result').style.display = 'none';
+            
+            // 检查是否有当前选中的姓名
+            if (currentSelectedName) {
+                // 将上次抽取的名字添加到已选中列表
+                if (!selectedNames.includes(currentSelectedName)) {
+                    selectedNames.push(currentSelectedName);
+                }
+                
+                // 恢复球形大小
+                sphereSize = 170;
+                createNameSphere();
+                
+                // 找到对应的粒子
+                let selectedParticle = null;
+                for (let i = 0; i < particles.length; i++) {
+                    const particle = particles[i];
+                    if (particle.userData.name === currentSelectedName) {
+                        selectedParticle = particle;
+                        break;
+                    }
+                }
+                
+                // 如果找到了对应的粒子，创建动画效果
+                if (selectedParticle) {
+                    // 计算粒子的目标屏幕坐标
+                    const vector = selectedParticle.position.clone();
+                    vector.project(camera);
+                    const targetX = (vector.x * 0.5 + 0.5) * window.innerWidth;
+                    const targetY = (-vector.y * 0.5 + 0.5) * window.innerHeight;
+                    
+                    // 创建动画元素
+                    const animationElement = document.createElement('div');
+                    animationElement.textContent = currentSelectedName;
+                    animationElement.style.position = 'fixed';
+                    animationElement.style.color = 'white';
+                    animationElement.style.fontSize = '48px';
+                    animationElement.style.fontWeight = 'normal';
+                    animationElement.style.pointerEvents = 'none';
+                    animationElement.style.zIndex = '300';
+                    animationElement.style.transition = 'all 0.1s ease-out';
+                    animationElement.style.padding = '20px 40px';
+                    animationElement.style.borderRadius = '10px';
+                    animationElement.style.background = 'rgba(255, 165, 0, 0.8)';
+                    
+                    // 设置初始位置和大小（屏幕中央）
+                    animationElement.style.left = '50%';
+                    animationElement.style.top = '50%';
+                    animationElement.style.transform = 'translate(-50%, -50%) scale(2)';
+                    
+                    // 添加到页面
+                    document.body.appendChild(animationElement);
+                    
+                    // 触发重排
+                    animationElement.offsetHeight;
+                    
+                    // 设置最终位置和大小（粒子位置）
+                    animationElement.style.left = targetX + 'px';
+                    animationElement.style.top = targetY + 'px';
+                    animationElement.style.fontSize = '24px';
+                    animationElement.style.transform = 'translate(-50%, -50%) scale(1)';
+                    animationElement.style.color = 'white';
+                    animationElement.style.background = 'rgba(255, 165, 0, 0.8)';
+                    
+                    // 动画结束后移除元素并继续
+                    setTimeout(() => {
+                        // 移除动画元素
+                        document.body.removeChild(animationElement);
+                        
+                        // 播放背景音乐
+                        document.getElementById('bgMusic').play();
+                    }, 100);
+                } else {
+                    // 如果没有找到对应的粒子，直接继续
+                    document.getElementById('bgMusic').play();
+                }
+            } else {
+                // 如果没有当前选中的姓名，直接继续
+                sphereSize = 170;
+                createNameSphere();
+                
+                document.getElementById('bgMusic').play();
+            }
+        }
+        
+        // 停止旋转
+        function stopSpinning() {
+            if (!isSpinning) return;
+            
+            isSpinning = false;
+            isSpinningFast = false;
+            
+            // 停止背景音乐
+            document.getElementById('bgMusic').pause();
+            
+            // 缩小球形
+            sphereSize = 100;
+            createNameSphere();
+            
+            // 随机抽取姓名
+            const availableNames = names.filter(name => !selectedNames.includes(name) && name !== currentSelectedName);
+            if (availableNames.length > 0) {
+                currentSelectedName = availableNames[Math.floor(Math.random() * availableNames.length)];
+                // 暂时不添加到selectedNames，等点击开始按钮后再添加
+                
+                // 找到抽取到的姓名在球面上的位置
+                let selectedParticle = null;
+                for (let i = 0; i < particles.length; i++) {
+                    const particle = particles[i];
+                    // 检查粒子是否对应当前选中的姓名
+                    if (particle.userData.name === currentSelectedName) {
+                        selectedParticle = particle;
+                        break;
+                    }
+                }
+                
+                // 如果找到了对应的粒子，创建动画效果
+                if (selectedParticle) {
+                    // 记录粒子的初始位置
+                    const startPosition = selectedParticle.position.clone();
+                    
+                    // 创建动画元素
+                    const animationElement = document.createElement('div');
+                    animationElement.textContent = currentSelectedName;
+                    animationElement.style.position = 'fixed';
+                    animationElement.style.color = 'cyan';
+                    animationElement.style.fontSize = '24px';
+                    animationElement.style.fontWeight = 'normal';
+                    animationElement.style.pointerEvents = 'none';
+                    animationElement.style.zIndex = '300';
+                    animationElement.style.transition = 'all 0.5s ease-out';
+                    animationElement.style.padding = '20px 40px';
+                    animationElement.style.borderRadius = '10px';
+                    animationElement.style.background = 'rgba(255, 165, 0, 0)'; // 初始透明
+                    
+                    // 计算屏幕坐标
+                    const vector = startPosition.clone();
+                    vector.project(camera);
+                    const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+                    const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
+                    
+                    // 设置初始位置和大小
+                    animationElement.style.left = x + 'px';
+                    animationElement.style.top = y + 'px';
+                    animationElement.style.transform = 'translate(-50%, -50%) scale(1)';
+                    
+                    // 添加到页面
+                    document.body.appendChild(animationElement);
+                    
+                    // 触发重排
+                    animationElement.offsetHeight;
+                    
+                    // 设置最终位置和大小
+                    animationElement.style.left = '50%';
+                    animationElement.style.top = '50%';
+                    animationElement.style.fontSize = '48px';
+                    animationElement.style.transform = 'translate(-50%, -50%) scale(2)';
+                    animationElement.style.color = 'white';
+                    animationElement.style.background = 'rgba(255, 165, 0, 0.8)'; // 最终半透明
+                    
+                    // 动画结束后显示结果
+                    setTimeout(() => {
+                        // 移除动画元素
+                        document.body.removeChild(animationElement);
+                        
+                        // 显示结果
+                        document.getElementById('result-name').textContent = currentSelectedName;
+                        document.getElementById('result').style.display = 'block';
+                        
+                        // 读出名字
+                        speakName(currentSelectedName);
+                    }, 500);
+                } else {
+                    // 如果没有找到对应的粒子，直接显示结果
+                    document.getElementById('result-name').textContent = currentSelectedName;
+                    document.getElementById('result').style.display = 'block';
+                    
+                    // 读出名字
+                    speakName(currentSelectedName);
+                }
+            }
+        }
+        
+        // 重置
+        function reset() {
+            selectedNames = [];
+            currentSelectedName = '';
+            sphereSize = 170;
+            createNameSphere();
+            document.getElementById('result').style.display = 'none';
+        }
+        
+        // 切换全屏
+        function toggleFullscreen() {
+            const fullscreenBtn = document.getElementById('fullscreenBtn');
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+                fullscreenBtn.textContent = '退出全屏';
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+                fullscreenBtn.textContent = '全屏';
+            }
+        }
+        
+        // 页面加载完成后初始化
+        window.onload = init;
+    </script>
+</body>
+</html>
