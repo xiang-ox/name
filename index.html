@@ -155,7 +155,8 @@
     <script>
         // 全局变量
         let points = [];
-        let names = Array(100).fill('姓名');
+        // 从本地存储中读取名单，如果没有则使用默认名单
+        let names = JSON.parse(localStorage.getItem('rollCallNames')) || Array(100).fill('姓名');
         let selectedNames = [];
         let currentSelectedName = '';
         let isSpinning = false;
@@ -458,6 +459,9 @@
                     alert('未找到姓名数据');
                     names = ['姓名'];
                 }
+                
+                // 将名单保存到本地存储
+                localStorage.setItem('rollCallNames', JSON.stringify(names));
                 
                 // 重置为初始状态
                 selectedNames = [];
